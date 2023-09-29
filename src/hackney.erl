@@ -316,36 +316,49 @@ request(Method, #hackney_url{}=URL0, Headers0, Body, Options0) ->
     {body, Body},
     {options, Options0}]),
 
-  #hackney_url{transport=Transport,
-    host = Host,
-    port = Port,
-    user = User,
-    password = Password} = URL,
+  telemetry:span(
+    [hackney, request],
+    #{method => Method,
+      url => URL,
+      headers => Headers0,
+      body => Body,
+      options => Options0},
+    fun() ->
+        #hackney_url{transport=Transport,
+        host = Host,
+        port = Port,
+        user = User,
+        password = Password} = URL,
 
-  Options = case User of
-              <<>> ->
-                Options0;
-              _ ->
-                lists:keystore(basic_auth, 1, Options0,
-                  {basic_auth, {User, Password}})
-            end,
+        Options = case User of
+                  <<>> ->
+                    Options0;
+                  _ ->
+                    lists:keystore(basic_auth, 1, Options0,
+                      {basic_auth, {User, Password}})
+                end,
 
-  Headers1 = hackney_headers_new:new(Headers0),
+        Headers1 = hackney_headers_new:new(Headers0),
 
-  case maybe_proxy(Transport, Host, Port, Options) of
-    {ok, Ref, AbsolutePath} ->
-      Request = make_request(
-                  Method, URL, Headers1, Body, Options, AbsolutePath
-                 ),
-      send_request(Ref, Request);
-    {ok, Ref} ->
-      Request = make_request(
-                  Method, URL, Headers1, Body, Options, false
-                 ),
-      send_request(Ref, Request);
-    Error ->
-      Error
-  end;
+        case maybe_proxy(Transport, Host, Port, Options) of
+          {ok, Ref, AbsolutePath} ->
+            Request = make_request(
+                        Method, URL, Headers1, Body, Options, AbsolutePath
+                       ),
+            Response = send_request(Ref, Request),
+            {Response, #{response => Response}};
+          {ok, Ref} ->
+            Request = make_request(
+                        Method, URL, Headers1, Body, Options, false
+                       ),
+            Response = send_request(Ref, Request),
+            {Response, #{response => Response}};
+          Error ->
+            {Error, #{response => nil}}
+        end
+    end
+  );
+
 request(Method, URL, Headers, Body, Options)
   when is_binary(URL) orelse is_list(URL) ->
   request(Method, hackney_url:parse_url(URL), Headers, Body, Options).
