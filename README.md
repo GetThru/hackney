@@ -425,6 +425,14 @@ Options = [{follow_redirect, true}, {max_redirect, 5}],
 
 Hackney uses CA bundles adapted from Mozilla by
 [certifi](https://hex.pm/packages/certifi).
+To trust a different bundle for every request, set the `cacertfile` key of the
+hackney application environment to the path of a PEM file. Hackney then reads
+its CA certificates from that file instead of certifi.
+
+```erlang
+application:set_env(hackney, cacertfile, "/path/to/cacerts.pem").
+```
+
 Recognising an organisation specific (self signed) certificates is possible
 by providing the necessary `ssl_options`. Note that `ssl_options` overrides all
 options passed to the ssl module.
