@@ -21,6 +21,7 @@
 
 -export([check_hostname_opts/1]).
 -export([cipher_opts/0]).
+-export([cacerts/0]).
 
 %% @doc Atoms used to identify messages in {active, once | true} mode.
 messages(_) -> {ssl, ssl_closed, ssl_error}.
@@ -45,11 +46,39 @@ check_hostname_opts(Host0) ->
    },
   SslOpts = [{verify, verify_peer},
              {depth, 100},
-             {cacerts, certifi:cacerts()},
+             {cacerts, cacerts()},
              {partial_chain, fun partial_chain/1},
              {verify_fun, VerifyFun}],
 
   check_hostname_opt(Host1, server_name_indication_opt(Host1, SslOpts)).
+
+%% @doc The DER encoded CA certificates that hackney trusts by default.
+%% The `cacertfile' key of the hackney application env names a PEM bundle
+%% that replaces the certifi bundle.
+-spec cacerts() -> [public_key:der_encoded()].
+cacerts() ->
+  case application:get_env(hackney, cacertfile) of
+    {ok, File} ->
+      cached({cacerts, File}, fun() -> read_cacerts(File) end);
+    undefined ->
+      certifi:cacerts()
+  end.
+
+read_cacerts(File) ->
+  {ok, Pem} = file:read_file(File),
+  [Der || {'Certificate', Der, not_encrypted} <- public_key:pem_decode(Pem)].
+
+%% A bundle does not change while the node runs, so decode each file once.
+cached(Key, Fun) ->
+  PersistentKey = {?MODULE, Key},
+  case persistent_term:get(PersistentKey, undefined) of
+    undefined ->
+      Value = Fun(),
+      persistent_term:put(PersistentKey, Value),
+      Value;
+    Value ->
+      Value
+  end.
 
 -ifdef(buggy_chacha_ciphers).
 cipher_opts() ->
@@ -104,14 +133,31 @@ partial_chain(Certs) ->
   end.
 
 
-%% instead of parsing every time, compile this list at runtime
+%% partial_chain/1 must trust the same roots as the cacerts option, or a
+%% root that the cacertfile bundle removes still passes as a trusted CA.
 decoded_cacerts() ->
+  case application:get_env(hackney, cacertfile) of
+    {ok, File} ->
+      cached({decoded_cacerts, File},
+             fun() -> decode_cacerts(cacerts()) end);
+    undefined ->
+      decoded_certifi_cacerts()
+  end.
+
+%% instead of parsing every time, compile this list at runtime
+decoded_certifi_cacerts() ->
   ct_expand:term(
     lists:foldl(fun(Cert, Acc) ->
                     Dec = public_key:pkix_decode_cert(Cert, otp),
                     [hackney_ssl_certificate:public_key_info(Dec) | Acc]
                 end, [], certifi:cacerts())
    ).
+
+decode_cacerts(Certs) ->
+  lists:foldl(fun(Cert, Acc) ->
+                  Dec = public_key:pkix_decode_cert(Cert, otp),
+                  [hackney_ssl_certificate:public_key_info(Dec) | Acc]
+              end, [], Certs).
 
 
 check_cert(CACerts, Cert) ->
